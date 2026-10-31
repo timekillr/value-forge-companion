@@ -5,11 +5,11 @@ const root = new URL('../app/src/main/assets/',import.meta.url);
 const dom = new JSDOM(readFileSync(new URL('index.html',root),'utf8'),{url:'file:///android_asset/index.html',runScripts:'outside-only',pretendToBeVisual:true});
 const {window} = dom, d = window.document;
 const calls = [];
-let settings = {paired:true,endpoint:'192.168.1.20:52881',network_permission:true}, online = true, finishScan = null;
+let settings = {paired:true,endpoint:'192.168.1.20:52881',network_permission:true}, online = true, finishScan = null, quickFailureAddress = null;
 let state = {session:{id:'session-a',pid:42,name:'Demo.exe',groups:[{id:'g1',name:'Gold'},{id:'g2',name:'Health'}],entries:[
   {id:'e1',group_id:'g1',name:'Gold',address:'0x1234',kind:'int32',value:'100',status:'ok',frozen:false},
   {id:'e2',group_id:'g1',name:'Gold copy',address:'0x1250',kind:'int32',value:'100',status:'ok',frozen:false}
-]},alive:true,storage_warning:null,scan:{kind:'auto',has_scan:true,busy:false,count:1,progress:1,operator:'equal',input:'100',results:[{address:'0x9999',kind:'int32',value:'100',error:null,candidate_kinds:['int32','int64'],values:{int32:'100',int64:'100'}}]}};
+]},alive:true,storage_warning:null,scan:{id:'scan-a',kind:'auto',has_scan:true,busy:false,count:1,progress:1,operator:'equal',input:'100',results:[{address:'0x9999',kind:'int32',value:'100',error:null,candidate_kinds:['int32','int64'],values:{int32:'100',int64:'100'}}]}};
 const processes = Array.from({length:120},(_,i)=>({id:'process-'+i,pid:i+10,name:'Game'+i+'.exe',command:'/game/'+i}));
 function response(id,data,error,status=0) { window.queueMicrotask(()=>window.ForgeReply(id,error?{ok:false,error,status}:{ok:true,data:structuredClone(data)})); }
 window.ForgeNative = {request(id,action,text) {
@@ -32,6 +32,15 @@ window.ForgeNative = {request(id,action,text) {
         state.group_write={total:members.length,written:members.map(e=>e.id),failed:[]}; break;
       }
       case 'write_entry': entry.value=a.value;break;
+      case 'write_results': {
+        assert.equal(a.session_id,state.session.id);assert.equal(a.scan_id,state.scan.id);
+        const written=[],failed=[];
+        for(const target of a.addresses){
+          if(target.address===quickFailureAddress){failed.push({id:target.address,address:target.address,error:'Test write failed'});continue;}
+          const row=state.scan.results.find(r=>r.address===target.address);row.value=a.value;if(row.values)row.values[target.kind]=a.value;written.push(target.address);
+        }
+        state.quick_write={total:a.addresses.length,written,failed};break;
+      }
       case 'rename_entry': entry.name=a.name;break;
       case 'move_entry': entry.group_id=a.group_id;break;
       case 'remove_entry': state.session.entries=state.session.entries.filter(e=>e.id!==a.entry_id);break;
@@ -67,6 +76,38 @@ try {
   assert.equal($('pairedAddress').textContent,settings.endpoint);
   assert.equal(d.querySelectorAll('[data-entry]').length,2);
   console.log('PASS remembered pairing connects and loads shared groups.');
+
+  click('[data-tab="scan"]');change(d.querySelector('[data-result-kind="0x9999"]'),'int64');
+  const quick=d.querySelector('[data-action="quickResult"]'),save=d.querySelector('[data-action="saveResult"]');
+  assert.ok(quick.compareDocumentPosition(save) & window.Node.DOCUMENT_POSITION_FOLLOWING);
+  click('[data-action="quickResult"]');$('quickValue').value='4294967297';click('#modalApply');
+  await until(()=>assert.match($('quickReport').textContent,/Updated 1 of 1 search addresses/));
+  assert.equal(commands().at(-1).args.args.addresses[0].kind,'int64');
+  assert.equal(commands().at(-1).args.args.value,'4294967297');
+  assert.equal(state.session.entries.length,2);assert.equal(state.session.groups.length,2);
+  assert.equal(commands().filter(c=>c.args.method==='save_entries').length,0);
+  click('[data-action="closeModal"]');
+  console.log('PASS Quick edit is above Save to group, preserves the chosen Auto width and numeric string, and creates no saved entries.');
+
+  state.scan.results.push({address:'0x999a',kind:'uint64',value:'100',error:null});window.ValueForgeUI.update(structuredClone(state));
+  click('[data-select="0x9999"]');click('[data-select="0x999a"]');click('#quickSelected');
+  $('quickValue').value='123';quickFailureAddress='0x999a';click('#modalApply');
+  await until(()=>assert.match($('quickReport').textContent,/Updated 1 of 2 search addresses/));
+  assert.match($('quickReport').textContent,/0x999a: Test write failed/);
+  assert.equal(commands().at(-1).args.args.addresses.length,2);
+  assert.equal(state.session.entries.length,2);assert.equal(state.session.groups.length,2);
+  quickFailureAddress=null;click('[data-action="closeModal"]');click('[data-action="clearSelection"]');
+  state.scan.results.pop();window.ValueForgeUI.update(structuredClone(state));
+  console.log('PASS several selected results receive one quick value with per-address failure feedback and no saved group.');
+
+  click('[data-action="quickResult"]');online=false;await window.ValueForgeUI.poll();assert.equal($('modalApply').disabled,true);
+  online=true;await window.ValueForgeUI.poll();assert.equal($('modalApply').disabled,false);
+  state.scan.id='new-search-from-decky';window.ValueForgeUI.update(structuredClone(state));
+  assert.equal($('modalApply').disabled,true);assert.match($('modalMessage').textContent,/changed/);
+  click('[data-action="closeModal"]');
+  console.log('PASS quick edits are blocked while offline and an old dialog cannot apply after another client changes the search.');
+
+  click('[data-tab="saved"]');
 
   click('[data-action="groupWrite"][data-id="g1"]');$('groupValue').value='88';click('#modalApply');
   await until(()=>assert.match($('groupReport').textContent,/Updated 2 of 2/));
@@ -141,5 +182,5 @@ try {
   await until(()=>assert.equal($('pairForm').hidden,false));
   assert.equal(settings.paired,false);assert.ok(state.session.groups.length>0);
   console.log('PASS forgetting a pairing works while offline and does not delete saved groups.');
-  console.log('10 companion UI scenarios passed.');
+  console.log('13 companion UI scenarios passed.');
 } finally { window.ValueForgeUI.close();dom.window.close(); }

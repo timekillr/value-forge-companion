@@ -6,7 +6,7 @@ panel stays closed. The Steam Machine performs all memory reads and writes.
 
 ## First connection
 
-1. Update Value Forge to **0.6.0 or newer** using https://is.gd/valueforge.
+1. Update Value Forge to **0.7.0 or newer** using https://is.gd/valueforge.
 2. Open the plugin in Decky, enable **Phone companion**, and choose **Pair a phone**.
 3. Install the signed **ValueForgeCompanion.apk** from this repository's Releases.
 4. Keep your phone and Steam Machine on the same home network. Allow Android's
@@ -18,6 +18,20 @@ Pairing is remembered across app, plugin, and machine restarts. The app reconnec
 while open, reports connection status and last response time, marks disconnected
 values stale, and disables writes until connected. Change the machine address in
 Connection if its IP changes; the saved identity and pairing are retained.
+
+## 0.2.0 quick edits
+
+Every search result has **Quick edit** immediately above **Save to group**.
+Enter the new value and press **Apply quick edit** to write without saving the
+address. Select several result checkboxes and use **Quick edit selected** to
+apply one value to all of them. Each row uses its chosen **Result type**, including
+ambiguous Auto results. The dialog reports successes and per-address failures.
+
+The plugin rereads search and saved values after applying an edit. Matching
+saved freeze targets adopt the new read-back value. Quick edits never create
+saved entries or advance the scanner's last-search comparison baseline. They
+require plugin 0.7.0 and are blocked if the connection, game session or search
+changes. Install over the existing app to keep pairing; no re-pair is needed.
 
 ## 0.1.1 layout fix
 

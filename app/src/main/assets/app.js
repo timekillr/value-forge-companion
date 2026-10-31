@@ -51,7 +51,7 @@
     $('scanOperator').disabled = !connected || busy || scanning;
     $('scanValue').disabled = !connected || busy || scanning;
     $('pairButton').disabled = busy;
-    if (modalContext?.saveSelection) $('modalApply').disabled = !connected || busy || scanning || !state?.alive;
+    if (modalContext?.saveSelection || modalContext?.quick) $('modalApply').disabled = !connected || busy || scanning || !state?.alive || Boolean(modalContext.quick && (modalContext.sessionId !== sessionId || modalContext.scanId !== state?.scan.id));
   }
   function showTab(name) {
     tab = name;
@@ -71,7 +71,9 @@
   }
   function update(next) {
     const previousSession = sessionId;
+    const previousScan = state?.scan.id;
     state = next; sessionId = state.session?.id || '';
+    if (previousScan !== state.scan.id) { selected.clear(); resultKinds.clear(); resultSignature = ''; }
     if (previousSession !== sessionId) {
       selected.clear(); resultKinds.clear(); savedSignature = resultSignature = '';
       $('scanType').innerHTML = typeOptions(state.scan.kind || 'auto', true);
@@ -84,6 +86,7 @@
     $('groupCount').textContent = state.session?.groups.length || 0;
     renderSaved(); renderResults(); renderScan();
     if (state.storage_warning) notice(state.storage_warning);
+    if (modalContext?.quick && (modalContext.sessionId !== sessionId || modalContext.scanId !== state.scan.id)) notice('Search results or the game session changed. Close this dialog and reopen Quick edit.');
     locks();
   }
   function renderSaved() {
@@ -133,11 +136,12 @@
       $('results').innerHTML = results.map(row => {
         const kind = resultKinds.get(row.address) || row.kind;
         const value = row.values ? row.values[kind] : row.value;
-        return `<article class="card"><div class="selectRow"><div class="reading">${escape(value ?? 'Unavailable')}</div><input type="checkbox" aria-label="Select ${escape(row.address)}" data-select="${escape(row.address)}"${selected.has(row.address) ? ' checked' : ''}></div><div class="code">${escape(row.address)} · ${escape(kind)}</div>${(row.candidate_kinds?.length || 0) > 1 ? `<label>Saved type<select data-result-kind="${escape(row.address)}">${options(row.candidate_kinds.map(kind => [kind,kind]),kind)}</select></label>` : ''}${row.error ? `<div class="muted small">${escape(row.error)}</div>` : ''}<button class="button secondary wide smallButton" data-action="saveResult" data-address="${escape(row.address)}" data-live>Save to group</button></article>`;
+        return `<article class="card"><div class="selectRow"><div class="reading">${escape(value ?? 'Unavailable')}</div><input type="checkbox" aria-label="Select ${escape(row.address)}" data-select="${escape(row.address)}"${selected.has(row.address) ? ' checked' : ''}></div><div class="code">${escape(row.address)} · ${escape(kind)}</div>${(row.candidate_kinds?.length || 0) > 1 ? `<label>Result type<select data-result-kind="${escape(row.address)}">${options(row.candidate_kinds.map(kind => [kind,kind]),kind)}</select></label>` : ''}${row.error ? `<div class="muted small">${escape(row.error)}</div>` : ''}<button class="button wide smallButton" data-action="quickResult" data-address="${escape(row.address)}" data-live>Quick edit</button><button class="button secondary wide smallButton" data-action="saveResult" data-address="${escape(row.address)}" data-live>Save to group</button></article>`;
       }).join('');
     }
     $('selectionBar').hidden = !selected.size;
     $('saveSelected').textContent = `Save selected (${selected.size})`;
+    $('quickSelected').textContent = `Quick edit selected (${selected.size})`;
   }
   async function loadProcesses() {
     try { const data = await api('processes'); processes = data.processes; renderProcesses(); }
@@ -174,6 +178,20 @@
   function confirm(title, text, action, offline = false) { openModal(title, `<p class="muted">${escape(text)}</p>${applyButton('Confirm')}`, action, {offline}); }
   function findGroup(id) { return state.session.groups.find(g => g.id === id); }
   function findEntry(id) { return state.session.entries.find(e => e.id === id); }
+  function quickEdit(rows) {
+    if (!rows.length) return;
+    if (!state.scan.id) { notice('Update the Value Forge plugin to 0.7.0 or newer to use Quick edit.'); return; }
+    const addresses = rows.map(row => ({address:row.address,kind:resultKinds.get(row.address) || row.kind}));
+    const first = rows[0], kind = addresses[0].kind, current = (first.values ? first.values[kind] : first.value) ?? '0';
+    const capturedSession = sessionId, capturedScan = state.scan.id;
+    openModal('Quick edit', `<p class="muted">Apply one value to ${addresses.length} search address${addresses.length === 1 ? '' : 'es'}. Nothing is added to your saved groups.</p>${addresses.map(row => `<div class="code">${escape(row.address)} · ${escape(row.kind)}</div>`).join('')}<label>Quick value<div class="numberInput"><input id="quickValue" inputmode="decimal" value="${escape(current)}"><button class="iconButton" data-action="sign" data-target="quickValue" aria-label="Change quick value sign">±</button></div></label>${applyButton(addresses.length === 1 ? 'Apply quick edit' : 'Apply to selected results')}<div id="quickReport" class="groupReport" role="status"></div>`, async () => {
+      const result = await command('write_results',{addresses,value:$('quickValue').value,session_id:capturedSession,scan_id:capturedScan});
+      if (result?.quick_write) {
+        const report = result.quick_write;
+        $('quickReport').innerHTML = `Updated ${report.written.length} of ${report.total} search addresses. Nothing was saved.${report.failed.map(f => `<div class="failed">${escape(f.address)}: ${escape(f.error)}</div>`).join('')}`;
+      }
+    }, {quick:true,sessionId:capturedSession,scanId:capturedScan});
+  }
   function save(addresses = [], groupId = '') {
     const groups = state.session.groups;
     const groupFields = `<label>Save to group<select id="saveGroup">${options([['','New group'],...groups.map(g => [g.id,g.name])],groupId)}</select></label><label id="newGroupLabel"${groupId ? ' hidden' : ''}>Group name<input id="groupName" type="text" placeholder="Gold, health, ammo…"></label>`;
@@ -243,6 +261,8 @@
       scan: async () => { scanPending = true; if (state) state.scan.progress = 0; renderScan(); await command('scan',{operator:$('scanOperator').value,value:$('scanValue').value,kind:$('scanType').value}); },
       reset: async () => { if (await command('reset_scan',{})) { selected.clear(); resultKinds.clear(); $('scanOperator').value = 'equal'; renderScan(); } },
       clearSelection: () => { selected.clear(); renderResults(true); locks(); },
+      quickSelected: () => quickEdit(state.scan.results.filter(row => selected.has(row.address))),
+      quickResult: () => quickEdit(state.scan.results.filter(row => row.address === button.dataset.address)),
       saveSelected: () => save(state.scan.results.filter(row => selected.has(row.address)).map(row => ({address:row.address,kind:resultKinds.get(row.address) || row.kind}))),
       saveResult: () => { const row = state.scan.results.find(r => r.address === button.dataset.address); save([{address:row.address,kind:resultKinds.get(row.address) || row.kind}]); },
       manual: () => save([],id || ''), group: () => editGroup(id), entry: () => editEntry(id),
