@@ -19,7 +19,14 @@ while open, reports connection status and last response time, marks disconnected
 values stale, and disables writes until connected. Change the machine address in
 Connection if its IP changes; the saved identity and pairing are retained.
 
-## Included in 0.1.0
+## 0.1.1 layout fix
+
+The native container now sizes the entire HTML viewport inside Android's system
+bar, display-cutout, and keyboard insets. The header stays below the status bar,
+including on Android versions that enforce edge-to-edge rendering. Install the
+new signed APK over 0.1.0 to keep the remembered pairing.
+
+## Included functionality
 
 - Complete process list, filtering, and one-tap connection.
 - Auto and signed/unsigned 8-, 16-, 32-, 64-bit integers, float32 and float64.

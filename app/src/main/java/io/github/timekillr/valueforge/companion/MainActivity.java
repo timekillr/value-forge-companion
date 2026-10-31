@@ -13,6 +13,8 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.view.WindowInsets;
+import android.view.ViewGroup;
+import android.widget.FrameLayout;
 import org.json.JSONObject;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
@@ -26,6 +28,7 @@ public final class MainActivity extends Activity {
     private static final String LOCAL_NETWORK = "android.permission.ACCESS_LOCAL_NETWORK";
     @Override public void onCreate(Bundle saved) {
         super.onCreate(saved);
+        if (Build.VERSION.SDK_INT >= 30) getWindow().setDecorFitsSystemWindows(false);
         store = new PairStore(this);
         web = new WebView(this); web.setBackgroundColor(Color.rgb(13, 20, 32));
         WebSettings settings = web.getSettings();
@@ -36,14 +39,22 @@ public final class MainActivity extends Activity {
         web.setWebViewClient(new WebViewClient() {
             @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) { return true; }
         });
-        web.setOnApplyWindowInsetsListener((view, insets) -> {
+        // Inset the WebView's actual bounds: WebView padding does not reliably
+        // move its HTML viewport below Android's status bar on edge-to-edge apps.
+        FrameLayout content = new FrameLayout(this);
+        content.setBackgroundColor(Color.rgb(13, 20, 32));
+        content.addView(web, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        content.setOnApplyWindowInsetsListener((view, insets) -> {
             if (Build.VERSION.SDK_INT >= 30) {
-                android.graphics.Insets bars = insets.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
+                android.graphics.Insets bars = insets.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout() | WindowInsets.Type.ime());
                 view.setPadding(bars.left, bars.top, bars.right, bars.bottom);
-            } else view.setPadding(insets.getSystemWindowInsetLeft(), insets.getSystemWindowInsetTop(), insets.getSystemWindowInsetRight(), insets.getSystemWindowInsetBottom());
-            return insets;
+                return WindowInsets.CONSUMED;
+            }
+            view.setPadding(insets.getSystemWindowInsetLeft(), insets.getSystemWindowInsetTop(), insets.getSystemWindowInsetRight(), insets.getSystemWindowInsetBottom());
+            return insets.consumeSystemWindowInsets();
         });
-        setContentView(web);
+        setContentView(content);
+        content.requestApplyInsets();
         web.loadUrl("file:///android_asset/index.html");
     }
     private void reply(String id, JSONObject data, Exception error) {
