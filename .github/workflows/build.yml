@@ -1,0 +1,62 @@
+name: Build and test Android companion
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Import initial source bundle
+        if: ${{ github.event_name != 'pull_request' && hashFiles('source-bootstrap.zip') != '' }}
+        run: |
+          test "$GITHUB_REF" = refs/heads/main
+          python3 - <<'PY'
+          from pathlib import Path
+          import zipfile
+          with zipfile.ZipFile('source-bootstrap.zip') as archive:
+              for item in archive.infolist():
+                  path = Path(item.filename)
+                  if path.is_absolute() or '..' in path.parts:
+                      raise SystemExit('Invalid source archive path')
+                  if item.is_dir() or item.filename.startswith('.github/workflows/'):
+                      continue
+                  path.parent.mkdir(parents=True, exist_ok=True)
+                  path.write_bytes(archive.read(item))
+                  path.chmod((item.external_attr >> 16) & 0o777 or 0o644)
+          PY
+          git rm source-bootstrap.zip
+          git add --all
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'Add complete Value Forge Companion 0.1.0 source'
+          git push origin HEAD:main
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npm test
+      - name: Install Android SDK platform
+        run: sdkmanager 'platforms;android-37.0' 'build-tools;36.0.0'
+      - name: Verify native connection and build APK
+        run: ./gradlew --no-daemon :app:testDebugUnitTest :app:assembleRelease
+      - uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-apk-and-test-results
+          path: |
+            app/build/outputs/apk/release/app-release-unsigned.apk
+            app/build/reports/tests/testDebugUnitTest/
+          if-no-files-found: error
