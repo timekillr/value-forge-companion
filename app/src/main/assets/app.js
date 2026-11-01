@@ -45,6 +45,7 @@
     $('lastSeen').textContent = lastSeen ? `Last response ${new Date(lastSeen).toLocaleTimeString()}${online ? '' : ' · values may be stale'}` : message;
     $('connectionControls').hidden = !paired;
     $('connectionToggle').textContent = wantConnection ? 'Disconnect' : 'Connect';
+    $('connectionPageToggle').textContent = wantConnection ? 'Disconnect' : 'Reconnect';
     $('connectionLabel').textContent = online ? 'Connected' : wantConnection ? 'Connecting…' : 'Disconnected';
     $('connectionHint').textContent = online ? 'Values refresh while connected.' : wantConnection ? 'Retrying for up to 10 seconds.' : connectionMessage || 'Tap Connect when your Steam Machine is ready.';
     locks();

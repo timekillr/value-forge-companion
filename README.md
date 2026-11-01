@@ -19,6 +19,12 @@ connection status and last response time, marks disconnected values stale, and
 disables writes until connected. Change the machine address in
 Connection if its IP changes; the saved identity and pairing are retained.
 
+## 0.3.1 Connection page shortcut
+
+The Connection page now has its own **Reconnect / Disconnect** button inside
+the remembered-pairing card, above Change machine address. It shares the same
+state and 10-second retry limit as the existing control above the game session.
+
 ## 0.3.0 connection controls
 
 The **Connect / Disconnect** button is visible above the game session on every

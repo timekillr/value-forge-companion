@@ -46,12 +46,20 @@ try{
   app.setMode('online');await app.toggle();assert.equal(app.d.querySelector('#connectionBadge span').textContent,'Connected');
   assert.equal(app.d.getElementById('gameName').textContent,'Connected game');
   console.log('PASS automatic failures stop at 10 seconds, stay stopped after resume, and manual Connect starts a new attempt.');
-  await app.toggle();const disconnected=app.reads().length;await app.advance(60000);
+  app.w.ValueForgeUI.showTab('connection');
+  assert.equal(app.d.getElementById('connectionPageToggle').textContent,'Disconnect');
+  app.d.getElementById('connectionPageToggle').click();await app.flush();
+  assert.equal(app.d.getElementById('connectionPageToggle').textContent,'Reconnect');
+  const disconnected=app.reads().length;await app.advance(60000);
   assert.equal(app.reads().length,disconnected);assert.equal(app.d.querySelector('#connectionBadge span').textContent,'Disconnected');
   assert.equal(app.d.getElementById('pairedInfo').hidden,false);
   assert.ok(app.d.querySelector('[data-action="manual"]').disabled);
   app.w.ForgeLifecycle(false);app.w.ForgeLifecycle(true);await app.flush();await app.advance(20000);assert.equal(app.reads().length,disconnected);
   console.log('PASS manual Disconnect pauses reads and edits, preserves pairing, and survives background/resume.');
+  app.d.getElementById('connectionPageToggle').click();await app.flush();
+  assert.equal(app.d.querySelector('#connectionBadge span').textContent,'Connected');
+  assert.equal(app.d.getElementById('connectionPageToggle').textContent,'Disconnect');
+  assert.equal(app.d.getElementById('connectionToggle').textContent,'Disconnect');
 }finally{app.close();}
 app=await workspace('hold');
 try{
