@@ -9,7 +9,9 @@
   const pending = new Map(), selected = new Set(), resultKinds = new Map();
   let sequence = 0, state = null, paired = false, endpoint = '', connected = false, busy = false;
   let sessionId = '', tab = 'saved', savedSignature = '', resultSignature = '', processes = [];
-  let active = true, timer = 0, polling = false, retry = 500, lastSeen = 0, scanPending = false;
+  let active = true, timer = 0, polling = null, retry = 500, lastSeen = 0, scanPending = false;
+  let wantConnection = false, retryDeadline = 0, retryTimer = 0, connectionMessage = '';
+  const retryWindow = 10000;
   let modalAction = null, modalContext = null, generation = 0;
 
   window.ForgeReply = (id, message) => {
@@ -33,13 +35,18 @@
     $('modalMessage').hidden = !text || !inModal; $('modalMessage').textContent = text;
   }
   function status(online, message = '') {
+    online = Boolean(online && wantConnection && active && paired);
     connected = online;
     const badge = $('connectionBadge');
     badge.className = 'badge ' + (online ? 'online' : paired ? 'offline' : '');
-    badge.querySelector('span').textContent = online ? 'Connected' : paired ? 'Reconnecting' : 'Not paired';
+    badge.querySelector('span').textContent = online ? 'Connected' : paired ? wantConnection ? 'Reconnecting' : 'Disconnected' : 'Not paired';
     document.body.classList.toggle('offlineValues', !online);
-    if (online) { lastSeen = Date.now(); retry = 500; }
+    if (online) { lastSeen = Date.now(); retry = 500; retryDeadline = 0; clearTimeout(retryTimer); }
     $('lastSeen').textContent = lastSeen ? `Last response ${new Date(lastSeen).toLocaleTimeString()}${online ? '' : ' · values may be stale'}` : message;
+    $('connectionControls').hidden = !paired;
+    $('connectionToggle').textContent = wantConnection ? 'Disconnect' : 'Connect';
+    $('connectionLabel').textContent = online ? 'Connected' : wantConnection ? 'Connecting…' : 'Disconnected';
+    $('connectionHint').textContent = online ? 'Values refresh while connected.' : wantConnection ? 'Retrying for up to 10 seconds.' : connectionMessage || 'Tap Connect when your Steam Machine is ready.';
     locks();
   }
   function locks() {
@@ -67,7 +74,7 @@
     $('pairedAddress').textContent = endpoint;
     $('permissionBox').hidden = settings.network_permission !== false;
     if (!$('endpoint').value) $('endpoint').value = endpoint;
-    if (!paired) { status(false); showTab('connection'); }
+    if (!paired) { stopConnection(); showTab('connection'); }
   }
   function update(next) {
     const previousSession = sessionId;
@@ -144,8 +151,9 @@
     $('quickSelected').textContent = `Quick edit selected (${selected.size})`;
   }
   async function loadProcesses() {
-    try { const data = await api('processes'); processes = data.processes; renderProcesses(); }
-    catch (error) { notice(error.message); }
+    const epoch = generation;
+    try { const data = await api('processes'); if (epoch === generation && wantConnection && active) { processes = data.processes; renderProcesses(); } }
+    catch (error) { if (epoch === generation && wantConnection) notice(error.message); }
   }
   function renderProcesses() {
     const filter = $('processFilter').value.toLowerCase();
@@ -157,11 +165,13 @@
   async function command(method, args, message = '') {
     if (!connected || busy || state?.scan.busy) return null;
     busy = true; notice(''); locks();
-    const expected = sessionId;
+    const expected = sessionId, epoch = generation;
     try {
       const result = await api('command', {method,args,expected_session_id:expected});
+      if (epoch !== generation || !wantConnection || !active) return null;
       update(result); status(true); if (message) notice(message); return result;
     } catch (error) {
+      if (epoch !== generation || !wantConnection || !active) return null;
       notice(error.message + (error.status === 0 ? ' Check the current values before retrying a change.' : ''));
       if (error.status === 401) { paired = false; updateSettings(await api('settings')); }
       return null;
@@ -217,29 +227,59 @@
   async function pair() {
     if (busy) return;
     busy = true; locks(); notice('');
-    try { updateSettings(await api('pair',{endpoint:$('endpoint').value,code:$('pairCode').value})); generation++; $('pairCode').value = ''; showTab('process'); await poll(); }
+    try { updateSettings(await api('pair',{endpoint:$('endpoint').value,code:$('pairCode').value})); $('pairCode').value = ''; showTab('process'); await connect(); }
     catch (error) { notice(error.message); }
     finally { busy = false; locks(); }
   }
-  async function poll() {
+  function cancelReads() { void api('cancel_reads').catch(() => {}); }
+  function stopConnection(message = '') {
+    wantConnection = false; generation++; retryDeadline = 0;
+    clearTimeout(timer); clearTimeout(retryTimer); connectionMessage = message;
+    status(false, message); cancelReads();
+  }
+  function startRetryWindow(started = Date.now()) {
+    if (!retryDeadline) retryDeadline = started + retryWindow;
+    clearTimeout(retryTimer);
+    const remaining = retryDeadline - Date.now();
+    if (remaining <= 0) { stopConnection('Could not connect within 10 seconds. Tap Connect to try again.'); return false; }
+    retryTimer = setTimeout(() => stopConnection('Could not connect within 10 seconds. Tap Connect to try again.'), remaining);
+    return true;
+  }
+  async function connect() {
+    if (!paired) return;
+    generation++; wantConnection = true; connected = false; retry = 500; retryDeadline = 0; connectionMessage = '';
+    clearTimeout(timer); cancelReads(); startRetryWindow(); status(false);
+    return poll();
+  }
+  async function poll(forceRefresh = false) {
     clearTimeout(timer);
-    if (!active || !paired || polling) return;
-    polling = true; const epoch = generation;
+    if (!active || !paired || !wantConnection || polling === generation) return;
+    if (retryDeadline && Date.now() >= retryDeadline) { startRetryWindow(); return; }
+    if (!retryDeadline && !startRetryWindow()) return;
+    const epoch = generation, started = Date.now(); polling = epoch;
     try {
-      const data = await api('state',{refresh: !state?.scan.busy});
-      if (epoch === generation && paired) { update(data); status(true); }
+      const data = await api('state',{refresh: forceRefresh || !state?.scan.busy, timeout_ms: retryDeadline ? Math.max(1,Math.min(8000,retryDeadline-Date.now())) : 8000});
+      if (epoch === generation && paired && wantConnection && active) { update(data); status(true); }
     } catch (error) {
-      if (epoch === generation) {
+      if (epoch === generation && wantConnection && active) {
         status(false, error.message); retry = Math.min(8000,Math.max(1000,retry * 2));
-        if (error.status === 401) updateSettings(await api('settings'));
+        if (error.status === 401) { stopConnection('Pair this phone again in Decky.'); updateSettings(await api('settings')); }
+        else startRetryWindow(started);
       }
     } finally {
-      polling = false;
-      if (active && paired) timer = setTimeout(poll, connected ? state?.scan.busy || scanPending ? 250 : 1200 : retry);
+      if (polling === epoch) polling = null;
+      if (epoch === generation && active && paired && wantConnection) timer = setTimeout(poll, connected ? state?.scan.busy || scanPending ? 250 : 1200 : Math.min(retry,Math.max(1,retryDeadline-Date.now())));
     }
   }
-  window.ForgeLifecycle = visible => { active = visible; if (visible) api('settings').then(settings => { updateSettings(settings); void poll(); }).catch(error => notice(error.message)); else clearTimeout(timer); };
-  window.ForgePermissionsChanged = async () => { updateSettings(await api('settings')); void poll(); };
+  window.ForgeLifecycle = visible => {
+    active = visible;
+    if (visible) api('settings').then(settings => {
+      updateSettings(settings);
+      if (wantConnection && startRetryWindow()) { status(false); void poll(); }
+    }).catch(error => notice(error.message));
+    else { generation++; clearTimeout(timer); cancelReads(); status(false); }
+  };
+  window.ForgePermissionsChanged = async () => { updateSettings(await api('settings')); if (wantConnection) void poll(); };
   document.addEventListener('change', event => {
     if (event.target.id === 'scanOperator') renderScan();
     if (event.target.id === 'saveGroup') $('newGroupLabel').hidden = Boolean(event.target.value);
@@ -254,9 +294,10 @@
     const handlers = {
       sign: () => { const field = $(button.dataset.target); field.value = field.value.startsWith('-') ? field.value.slice(1) : '-' + field.value.replace(/^\+/,''); },
       dismiss: () => notice(''), closeModal, modalApply: () => modalAction?.(), pair,
+      toggleConnection: () => wantConnection ? stopConnection('Disconnected. Pairing is kept; tap Connect to resume.') : connect(),
       permission: async () => { await api('permission'); },
       processes: loadProcesses,
-      refresh: async () => { try { update(await api('state',{refresh:true})); status(true); } catch (error) { status(false); notice(error.message); } },
+      refresh: () => poll(true),
       attach: async () => { const process = processes.find(p => p.id === id); if (await command('attach',{pid:process.pid,expected_id:process.id})) showTab(state.session.groups.length ? 'saved' : 'scan'); },
       scan: async () => { scanPending = true; if (state) state.scan.progress = 0; renderScan(); await command('scan',{operator:$('scanOperator').value,value:$('scanValue').value,kind:$('scanType').value}); },
       reset: async () => { if (await command('reset_scan',{})) { selected.clear(); resultKinds.clear(); $('scanOperator').value = 'equal'; renderScan(); } },
@@ -276,14 +317,14 @@
         const result = await command('write_group',{group_id:id,value:$('groupValue').value});
         if (result?.group_write) { const report = result.group_write; $('groupReport').innerHTML = `Updated ${report.written.length} of ${report.total} addresses.${report.failed.map(f => `<div class="failed">${escape(f.name)} · ${escape(f.address)}: ${escape(f.error)}</div>`).join('')}`; }
       }); },
-      forget: () => confirm('Forget this pairing?', 'You will need a new code from Decky to pair again. Saved groups remain on the Steam Machine.',async () => { updateSettings(await api('forget')); generation++; state = null; sessionId = ''; clearTimeout(timer); closeModal(); },true),
-      address: () => openModal('Change machine address', `<p class="muted">Pairing stays remembered. The machine must present the same fingerprint.</p><label>Steam Machine address<input id="newAddress" value="${escape(endpoint)}"></label>${applyButton('Reconnect')}`, async () => { try { updateSettings(await api('address',{endpoint:$('newAddress').value})); generation++; closeModal(); void poll(); } catch (error) { notice(error.message); } }, {offline:true}),
+      forget: () => confirm('Forget this pairing?', 'You will need a new code from Decky to pair again. Saved groups remain on the Steam Machine.',async () => { stopConnection(); updateSettings(await api('forget')); state = null; sessionId = ''; closeModal(); },true),
+      address: () => openModal('Change machine address', `<p class="muted">Pairing stays remembered. The machine must present the same fingerprint.</p><label>Steam Machine address<input id="newAddress" value="${escape(endpoint)}"></label>${applyButton('Reconnect')}`, async () => { try { updateSettings(await api('address',{endpoint:$('newAddress').value})); closeModal(); void connect(); } catch (error) { notice(error.message); } }, {offline:true}),
     };
     if (handlers[action]) Promise.resolve(handlers[action]()).catch(error => notice(error.message));
   });
   $('scanType').innerHTML = typeOptions('auto',true);
   $('scanOperator').innerHTML = options(comparisons.filter(([id]) => initial.has(id)),'equal');
-  api('settings').then(settings => { updateSettings(settings); if (paired) void poll(); }).catch(error => notice(error.message));
+  api('settings').then(settings => { updateSettings(settings); if (paired) void connect(); }).catch(error => notice(error.message));
   // Accessible test seam also supports a browser preview without secret credentials.
-  window.ValueForgeUI = {update, status, showTab, api, poll, close:() => { active = false; clearTimeout(timer); for (const item of pending.values()) clearTimeout(item.timer); pending.clear(); }};
+  window.ValueForgeUI = {update, status, showTab, api, poll, close:() => { active = false; clearTimeout(timer); clearTimeout(retryTimer); for (const item of pending.values()) clearTimeout(item.timer); pending.clear(); }};
 })();

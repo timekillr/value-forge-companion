@@ -14,10 +14,26 @@ panel stays closed. The Steam Machine performs all memory reads and writes.
 5. Enter the machine address and six-digit code shown in Decky. Compare the
    displayed fingerprint and choose **Match & pair** only when it matches.
 
-Pairing is remembered across app, plugin, and machine restarts. The app reconnects
-while open, reports connection status and last response time, marks disconnected
-values stale, and disables writes until connected. Change the machine address in
+Pairing is remembered across app, plugin, and machine restarts. The app reports
+connection status and last response time, marks disconnected values stale, and
+disables writes until connected. Change the machine address in
 Connection if its IP changes; the saved identity and pairing are retained.
+
+## 0.3.0 connection controls
+
+The **Connect / Disconnect** button is visible above the game session on every
+tab. Opening the app with a remembered pairing starts a connection attempt.
+Automatic attempts last at most **10 seconds**, then stop until you press
+**Connect**. A lost connection gets the same bounded retry window. Successful
+connections continue normal live value/progress polling.
+
+**Disconnect** immediately stops polling and cancels queued/in-flight connection
+checks. It keeps pairing and cached groups, marks readings stale, and disables
+memory edits. Returning from the background does not undo a manual disconnect
+or restart an expired retry window. Connect explicitly starts a fresh window.
+Late replies cannot reconnect the UI after it has stopped. Commands already sent
+to the Steam Machine may finish; disconnect does not undo edits or stop freezes.
+No Decky plugin update is required; continue using 0.7.0 or newer.
 
 ## 0.2.0 quick edits
 
@@ -67,7 +83,8 @@ The plugin's optional HTTPS listener uses port 52881. Pairing codes expire after
 five minutes. The app pins the verified certificate and encrypts credentials
 with Android Keystore. No credentials are exposed to its packaged UI scripts.
 Removing a phone in Decky revokes access. App/network reconnects only read state;
-they never automatically replay writes, scans, or freeze actions.
+they never automatically replay writes, scans, or freeze actions. Automatic
+reconnection stops after 10 seconds and can be resumed with Connect.
 
 The touch interface is packaged locally in the APK. A restricted WebView renders
 it; native Java code handles TLS, certificate pinning, local-network permission,

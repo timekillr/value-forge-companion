@@ -6,6 +6,10 @@ import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.security.KeyStore;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
 import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLServerSocket;
@@ -24,6 +28,8 @@ public class TransportTest {
     private String pin;
     private String receivedBody = "", receivedAuth;
     private final AtomicInteger requests = new AtomicInteger();
+    private volatile boolean holdResponse;
+    private final CountDownLatch requestArrived = new CountDownLatch(1), releaseResponse = new CountDownLatch(1);
     @Before public void start() throws Exception {
         KeyStore keys = KeyStore.getInstance("PKCS12");
         keys.load(getClass().getResourceAsStream("/test-server.p12"), "test-only-password".toCharArray());
@@ -45,6 +51,8 @@ public class TransportTest {
                 char[] chars = new char[length];int count=0;
                 while (count<length) count += input.read(chars,count,length-count);
                 receivedBody = new String(chars);
+                requestArrived.countDown();
+                if (holdResponse) releaseResponse.await(5, TimeUnit.SECONDS);
                 boolean info = first.startsWith("GET /v1/info ");
                 int code = info || "Bearer test-token".equals(receivedAuth) ? 200 : 401;
                 JSONObject body = new JSONObject().put("ok",code == 200);
@@ -57,7 +65,7 @@ public class TransportTest {
         });
         acceptor.setDaemon(true);acceptor.start();endpoint = Endpoint.parse("127.0.0.1:"+server.getLocalPort());
     }
-    @After public void stop() throws Exception { if (server != null) server.close(); if (acceptor != null) acceptor.join(2000); }
+    @After public void stop() throws Exception { releaseResponse.countDown(); if (server != null) server.close(); if (acceptor != null) acceptor.join(2000); }
     @Test public void publicProbeReturnsActualFingerprintWithoutSendingCredentials() throws Exception {
         JSONObject info = Transport.probe(endpoint);
         assertEquals(pin,info.getString("fingerprint"));assertNull(receivedAuth);
@@ -80,5 +88,25 @@ public class TransportTest {
         assertEquals("18446744073709551601",new JSONObject(receivedBody).getString("value"));
         try { Transport.request(endpoint,pin,"revoked","GET","/v1/state",null);fail(); }
         catch (Transport.Failure error) { assertEquals(401,error.status); }
+    }
+    @Test public void cancelledQueuedReadNeverSendsCredentialsAndDoesNotCancelCommands() throws Exception {
+        Transport.Cancellation cancellation = new Transport.Cancellation();cancellation.cancel();
+        try { Transport.request(endpoint,pin,"test-token","GET","/v1/state",null,cancellation,8000);fail(); }
+        catch (Transport.Failure expected) { assertEquals(0, expected.status); }
+        assertEquals(0, requests.get());
+        Transport.request(endpoint,pin,"test-token","POST","/v1/command",new JSONObject());
+        assertEquals(1, requests.get());
+    }
+    @Test public void disconnectClosesAnInFlightTlsReadImmediately() throws Exception {
+        holdResponse = true;
+        Transport.Cancellation cancellation = new Transport.Cancellation();
+        FutureTask<JSONObject> read = new FutureTask<>(() -> Transport.request(endpoint,pin,"test-token","GET","/v1/state",null,cancellation,8000));
+        Thread thread = new Thread(read);thread.setDaemon(true);thread.start();
+        try {
+            assertTrue(requestArrived.await(3, TimeUnit.SECONDS));
+            cancellation.cancel();
+            try { read.get(2,TimeUnit.SECONDS);fail("Cancelled read must not finish successfully"); }
+            catch (ExecutionException expected) { assertTrue(expected.getCause() instanceof java.io.IOException); }
+        } finally { cancellation.cancel();releaseResponse.countDown();thread.join(2000); }
     }
 }

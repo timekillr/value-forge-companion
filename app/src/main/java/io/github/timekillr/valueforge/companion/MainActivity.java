@@ -25,6 +25,11 @@ public final class MainActivity extends Activity {
     private PairStore store;
     private final ExecutorService reads = Executors.newSingleThreadExecutor();
     private final ExecutorService writes = Executors.newSingleThreadExecutor();
+    private volatile Transport.Cancellation readCancellation = new Transport.Cancellation();
+    private synchronized void cancelReads() {
+        readCancellation.cancel();
+        readCancellation = new Transport.Cancellation();
+    }
     private static final String LOCAL_NETWORK = "android.permission.ACCESS_LOCAL_NETWORK";
     @Override public void onCreate(Bundle saved) {
         super.onCreate(saved);
@@ -101,6 +106,10 @@ public final class MainActivity extends Activity {
     final class Bridge {
         @JavascriptInterface public void request(String id, String action, String text) {
             if (!id.matches("[A-Za-z0-9_-]{1,64}")) return;
+            // Do this directly on the bridge thread: the read/write executors
+            // may be blocked on network IO or a long-running scan command.
+            if (action.equals("cancel_reads")) { cancelReads(); reply(id, new JSONObject(), null); return; }
+            Transport.Cancellation requestCancellation = readCancellation;
             ExecutorService pool = action.equals("state") || action.equals("processes") || action.equals("ping") ? reads : writes;
             pool.execute(() -> {
                 try {
@@ -137,7 +146,10 @@ public final class MainActivity extends Activity {
                         case "command": path = "/v1/command"; method = "POST"; body = args; body.put("request_id", UUID.randomUUID().toString()); break;
                         default: throw new IllegalArgumentException("Unsupported app request.");
                     }
-                    reply(id, Transport.request(endpoint, pairing.getString("pin"), pairing.getString("token"), method, path, body), null);
+                    boolean read = method.equals("GET");
+                    int timeout = Math.max(1, Math.min(8000, args.optInt("timeout_ms", 8000)));
+                    reply(id, Transport.request(endpoint, pairing.getString("pin"), pairing.getString("token"), method, path, body,
+                            read ? requestCancellation : null, timeout), null);
                 } catch (Exception error) {
                     if (error instanceof Transport.Failure && ((Transport.Failure) error).status == 401) store.forget();
                     reply(id, null, error);
@@ -151,5 +163,5 @@ public final class MainActivity extends Activity {
     }
     @Override protected void onResume() { super.onResume(); if (web != null) web.evaluateJavascript("window.ForgeLifecycle&&window.ForgeLifecycle(true)", null); }
     @Override protected void onPause() { if (web != null) web.evaluateJavascript("window.ForgeLifecycle&&window.ForgeLifecycle(false)", null); super.onPause(); }
-    @Override protected void onDestroy() { reads.shutdownNow(); writes.shutdownNow(); if (web != null) { web.removeJavascriptInterface("ForgeNative"); web.destroy(); } super.onDestroy(); }
+    @Override protected void onDestroy() { cancelReads(); reads.shutdownNow(); writes.shutdownNow(); if (web != null) { web.removeJavascriptInterface("ForgeNative"); web.destroy(); } super.onDestroy(); }
 }

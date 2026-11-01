@@ -14,6 +14,7 @@ const processes = Array.from({length:120},(_,i)=>({id:'process-'+i,pid:i+10,name
 function response(id,data,error,status=0) { window.queueMicrotask(()=>window.ForgeReply(id,error?{ok:false,error,status}:{ok:true,data:structuredClone(data)})); }
 window.ForgeNative = {request(id,action,text) {
   const args = JSON.parse(text); calls.push({action,args});
+  if (action === 'cancel_reads') return response(id,{});
   if (action === 'settings') return response(id,settings);
   if (action === 'forget') { settings.paired=false;return response(id,settings); }
   if (action === 'address') { settings.endpoint=args.endpoint;return response(id,settings); }

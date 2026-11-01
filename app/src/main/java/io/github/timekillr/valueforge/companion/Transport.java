@@ -13,8 +13,25 @@ import java.security.MessageDigest;
 import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
 import java.util.Locale;
+import java.util.HashSet;
+import java.util.Set;
 
 final class Transport {
+    /** Cancels queued/in-flight reads without touching a command already sent. */
+    static final class Cancellation {
+        private final Set<SSLSocket> sockets = new HashSet<>();
+        private boolean cancelled;
+        synchronized void track(SSLSocket socket) throws Exception {
+            if (cancelled) { socket.close(); throw new Failure(0, "Connection check cancelled."); }
+            sockets.add(socket);
+        }
+        synchronized void release(SSLSocket socket) { sockets.remove(socket); }
+        synchronized void cancel() {
+            cancelled = true;
+            for (SSLSocket socket : sockets) try { socket.close(); } catch (Exception ignored) { }
+            sockets.clear();
+        }
+    }
     static final class Failure extends Exception {
         final int status;
         Failure(int status, String message) { super(message); this.status = status; }
@@ -29,6 +46,9 @@ final class Transport {
         return pin.substring(0, 20).toUpperCase(Locale.ROOT).replaceAll("(.{4})(?!$)", "$1 ");
     }
     private static SSLSocket connect(Endpoint endpoint, String pin) throws Exception {
+        return connect(endpoint, pin, null, 8000);
+    }
+    private static SSLSocket connect(Endpoint endpoint, String pin, Cancellation cancellation, int timeoutMs) throws Exception {
         SSLContext context = SSLContext.getInstance("TLS");
         context.init(null, new TrustManager[]{new X509TrustManager() {
             public X509Certificate[] getAcceptedIssuers() { return new X509Certificate[0]; }
@@ -42,12 +62,13 @@ final class Transport {
             }
         }}, null);
         SSLSocket socket = (SSLSocket) context.getSocketFactory().createSocket();
-        socket.setSoTimeout(8000);
+        socket.setSoTimeout(timeoutMs);
         try {
-            socket.connect(new InetSocketAddress(endpoint.host, endpoint.port), 4000);
+            if (cancellation != null) cancellation.track(socket);
+            socket.connect(new InetSocketAddress(endpoint.host, endpoint.port), Math.min(4000, timeoutMs));
             socket.startHandshake();
             return socket;
-        } catch (Exception error) { socket.close(); throw error; }
+        } catch (Exception error) { socket.close(); if (cancellation != null) cancellation.release(socket); throw error; }
     }
     /** Trust-once probe sends only public /info, never pairing codes or tokens. */
     static JSONObject probe(Endpoint endpoint) throws Exception {
@@ -61,11 +82,15 @@ final class Transport {
         }
     }
     static JSONObject request(Endpoint endpoint, String pin, String token, String method, String path, JSONObject body) throws Exception {
+        return request(endpoint, pin, token, method, path, body, null, 8000);
+    }
+    static JSONObject request(Endpoint endpoint, String pin, String token, String method, String path, JSONObject body, Cancellation cancellation, int timeoutMs) throws Exception {
         if (pin == null || pin.length() != 64) throw new Failure(401, "Pair this phone first.");
-        try (SSLSocket socket = connect(endpoint, pin)) {
-            socket.setSoTimeout(path.equals("/v1/command") ? 200000 : 8000);
+        SSLSocket socket = connect(endpoint, pin, cancellation, timeoutMs);
+        try (SSLSocket connection = socket) {
+            socket.setSoTimeout(path.equals("/v1/command") ? 200000 : timeoutMs);
             return exchange(socket, endpoint, method, path, token, body);
-        }
+        } finally { if (cancellation != null) cancellation.release(socket); }
     }
     private static JSONObject exchange(SSLSocket socket, Endpoint endpoint, String method, String path, String token, JSONObject body) throws Exception {
         byte[] payload = body == null ? new byte[0] : body.toString().getBytes(StandardCharsets.UTF_8);
