@@ -19,6 +19,13 @@ connection status and last response time, marks disconnected values stale, and
 disables writes until connected. Change the machine address in
 Connection if its IP changes; the saved identity and pairing are retained.
 
+## 0.3.2 Connection page only
+
+**Reconnect / Disconnect** now appears only on the Connection page. The
+duplicate controls above each page have been removed. Connection status and
+retry guidance live in the pairing card; the header badge still opens Connection.
+The 10-second retry limit and remembered pairing behavior are unchanged.
+
 ## 0.3.1 Connection page shortcut
 
 The Connection page now has its own **Reconnect / Disconnect** button inside

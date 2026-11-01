@@ -43,11 +43,9 @@
     document.body.classList.toggle('offlineValues', !online);
     if (online) { lastSeen = Date.now(); retry = 500; retryDeadline = 0; clearTimeout(retryTimer); }
     $('lastSeen').textContent = lastSeen ? `Last response ${new Date(lastSeen).toLocaleTimeString()}${online ? '' : ' · values may be stale'}` : message;
-    $('connectionControls').hidden = !paired;
-    $('connectionToggle').textContent = wantConnection ? 'Disconnect' : 'Connect';
     $('connectionPageToggle').textContent = wantConnection ? 'Disconnect' : 'Reconnect';
     $('connectionLabel').textContent = online ? 'Connected' : wantConnection ? 'Connecting…' : 'Disconnected';
-    $('connectionHint').textContent = online ? 'Values refresh while connected.' : wantConnection ? 'Retrying for up to 10 seconds.' : connectionMessage || 'Tap Connect when your Steam Machine is ready.';
+    $('connectionHint').textContent = online ? 'Values refresh while connected.' : wantConnection ? 'Retrying for up to 10 seconds.' : connectionMessage || 'Tap Reconnect when your Steam Machine is ready.';
     locks();
   }
   function locks() {
@@ -242,8 +240,8 @@
     if (!retryDeadline) retryDeadline = started + retryWindow;
     clearTimeout(retryTimer);
     const remaining = retryDeadline - Date.now();
-    if (remaining <= 0) { stopConnection('Could not connect within 10 seconds. Tap Connect to try again.'); return false; }
-    retryTimer = setTimeout(() => stopConnection('Could not connect within 10 seconds. Tap Connect to try again.'), remaining);
+    if (remaining <= 0) { stopConnection('Could not connect within 10 seconds. Tap Reconnect to try again.'); return false; }
+    retryTimer = setTimeout(() => stopConnection('Could not connect within 10 seconds. Tap Reconnect to try again.'), remaining);
     return true;
   }
   async function connect() {
@@ -295,7 +293,7 @@
     const handlers = {
       sign: () => { const field = $(button.dataset.target); field.value = field.value.startsWith('-') ? field.value.slice(1) : '-' + field.value.replace(/^\+/,''); },
       dismiss: () => notice(''), closeModal, modalApply: () => modalAction?.(), pair,
-      toggleConnection: () => wantConnection ? stopConnection('Disconnected. Pairing is kept; tap Connect to resume.') : connect(),
+      toggleConnection: () => wantConnection ? stopConnection('Disconnected. Pairing is kept; tap Reconnect to resume.') : connect(),
       permission: async () => { await api('permission'); },
       processes: loadProcesses,
       refresh: () => poll(true),

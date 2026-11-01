@@ -32,14 +32,16 @@ async function workspace(mode='offline') {
     }
     clock=target;await flush();
   };
-  return {w,d,calls,held,state,advance,flush,reply,setMode:value=>{mode=value;},reads:()=>calls.filter(c=>c.action==='state'),toggle:async()=>{d.getElementById('connectionToggle').click();await flush();},close:()=>{w.ValueForgeUI.close();dom.window.close();}};
+  return {w,d,calls,held,state,advance,flush,reply,setMode:value=>{mode=value;},reads:()=>calls.filter(c=>c.action==='state'),toggle:async()=>{w.ValueForgeUI.showTab('connection');d.getElementById('connectionPageToggle').click();await flush();},close:()=>{w.ValueForgeUI.close();dom.window.close();}};
 }
 let app=await workspace();
 try{
-  assert.equal(app.d.getElementById('connectionToggle').textContent,'Disconnect');
+  assert.equal(app.d.getElementById('connectionPageToggle').textContent,'Disconnect');
+  assert.equal(app.d.querySelectorAll('[data-action="toggleConnection"]').length,1);
+  assert.ok(app.d.getElementById('connectionPageToggle').closest('#tab-connection'));
   await app.advance(9999);assert.equal(app.d.querySelector('#connectionBadge span').textContent,'Reconnecting');
   assert.ok(app.reads().length>1);assert.ok(app.reads().every(r=>r.args.timeout_ms<=8000));
-  await app.advance(1);assert.equal(app.d.getElementById('connectionToggle').textContent,'Connect');
+  await app.advance(1);assert.equal(app.d.getElementById('connectionPageToggle').textContent,'Reconnect');
   assert.match(app.d.getElementById('connectionHint').textContent,/10 seconds/);
   const stopped=app.reads().length;await app.advance(60000);assert.equal(app.reads().length,stopped);
   app.w.ForgeLifecycle(false);app.w.ForgeLifecycle(true);await app.flush();await app.advance(20000);assert.equal(app.reads().length,stopped);
@@ -59,12 +61,11 @@ try{
   app.d.getElementById('connectionPageToggle').click();await app.flush();
   assert.equal(app.d.querySelector('#connectionBadge span').textContent,'Connected');
   assert.equal(app.d.getElementById('connectionPageToggle').textContent,'Disconnect');
-  assert.equal(app.d.getElementById('connectionToggle').textContent,'Disconnect');
 }finally{app.close();}
 app=await workspace('hold');
 try{
   const old=app.held[0];await app.advance(10000);
-  assert.equal(app.d.getElementById('connectionToggle').textContent,'Connect');
+  assert.equal(app.d.getElementById('connectionPageToggle').textContent,'Reconnect');
   assert.ok(app.calls.filter(c=>c.action==='cancel_reads').length>=2);
   app.reply(old,app.state);await app.flush();
   assert.equal(app.d.querySelector('#connectionBadge span').textContent,'Disconnected');
